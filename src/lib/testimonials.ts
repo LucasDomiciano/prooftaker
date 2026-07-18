@@ -153,47 +153,98 @@ async function runSubmitTestimonial(data: {
       const { improveTestimonialCopy } = await import("./ai.server");
       const { improved } = await improveTestimonialCopy(original);
 
-      const rowBase = {
-        id,
+      // Preferir RPC com quota + status forçado + consumo de slot de vídeo
+      const { data: rpcRows, error: rpcError } = await writer.rpc(
+        "insert_pending_testimonial",
+        {
+          p_slug: data.slug,
+          p_name: data.name.trim(),
+          p_role: data.role?.trim() || "",
+          p_company: data.company?.trim() || "",
+          p_text: original,
+          p_rating: data.rating,
+          p_video_path: videoPath,
+          p_text_original: original,
+          p_text_improved: improved,
+          p_id: id,
+        },
+      );
+      const rpcResult = Array.isArray(rpcRows) ? rpcRows[0] : rpcRows;
+
+      if (!rpcError && rpcResult && rpcResult.ok === false) {
+        return {
+          ok: false as const,
+          error: rpcResult.error || "Não foi possível salvar o depoimento.",
+        };
+      }
+
+      if (rpcError || !rpcResult?.ok) {
+        // Fallback se migration 007 ainda não aplicada
+        const missingRpc =
+          /insert_pending_testimonial|Could not find the function|schema cache/i.test(
+            rpcError?.message || "",
+          );
+        if (!missingRpc && rpcError) {
+          return {
+            ok: false as const,
+            error: rpcError.message || "Não foi possível salvar o depoimento.",
+          };
+        }
+
+        const rowBase = {
+          id,
+          project_id: quota.project_id as string,
+          name: data.name.trim(),
+          role: data.role?.trim() || "",
+          company: data.company?.trim() || "",
+          text: original,
+          rating: data.rating,
+          has_video: hasVideo,
+          video_path: videoPath,
+          status: "pendente" as const,
+          tags: [] as string[],
+        };
+
+        let error: { message: string; code?: string } | null = null;
+        {
+          const res = await writer.from("testimonials").insert({
+            ...rowBase,
+            text_original: original,
+            text_improved: improved,
+          });
+          error = res.error;
+        }
+
+        if (error && /text_original|text_improved|column/i.test(error.message)) {
+          const res = await writer.from("testimonials").insert(rowBase);
+          error = res.error;
+        }
+
+        if (error) {
+          return {
+            ok: false as const,
+            error: error.message || "Não foi possível salvar o depoimento.",
+          };
+        }
+      }
+
+      const createdId =
+        (rpcResult?.ok && rpcResult.testimonial_id) || id;
+
+      const created = {
+        id: createdId as string,
         project_id: quota.project_id as string,
         name: data.name.trim(),
         role: data.role?.trim() || "",
         company: data.company?.trim() || "",
         text: original,
+        text_original: original,
+        text_improved: improved,
         rating: data.rating,
         has_video: hasVideo,
         video_path: videoPath,
         status: "pendente" as const,
         tags: [] as string[],
-      };
-
-      // Insert sem .select(): anon não consegue ler status "pendente" (RLS)
-      let error: { message: string; code?: string } | null = null;
-      {
-        const res = await writer.from("testimonials").insert({
-          ...rowBase,
-          text_original: original,
-          text_improved: improved,
-        });
-        error = res.error;
-      }
-
-      if (error && /text_original|text_improved|column/i.test(error.message)) {
-        const res = await writer.from("testimonials").insert(rowBase);
-        error = res.error;
-      }
-
-      if (error) {
-        return {
-          ok: false as const,
-          error: error.message || "Não foi possível salvar o depoimento.",
-        };
-      }
-
-      const created = {
-        ...rowBase,
-        text_original: original,
-        text_improved: improved,
         avatar_url: null as string | null,
         created_at: new Date().toISOString().slice(0, 10),
       };

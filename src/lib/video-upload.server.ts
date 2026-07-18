@@ -7,8 +7,9 @@ import {
 } from "./video-upload";
 
 /**
- * Cria um slot de upload assinado no Storage.
+ * Cria um slot de upload assinado no Storage + registra path no banco.
  * O browser envia o arquivo direto ao Supabase (evita o limite ~4,5 MB da Vercel).
+ * Exige SUPABASE_SERVICE_ROLE_KEY (sem fallback anon).
  */
 export const createVideoUploadSlot = createServerFn({ method: "POST" })
   .validator(
@@ -19,14 +20,23 @@ export const createVideoUploadSlot = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }) => {
-    const { isSupabaseEnabled, getSupabaseAdminClient, getSupabaseServerClient } =
-      await import("./supabase.server");
+    const { isSupabaseEnabled, getSupabaseAdminClient } = await import(
+      "./supabase.server"
+    );
 
     if (!isSupabaseEnabled()) {
       return {
         ok: false as const,
         error: "Upload direto exige Supabase configurado.",
-        fallbackServer: true as const,
+      };
+    }
+
+    const admin = getSupabaseAdminClient();
+    if (!admin) {
+      return {
+        ok: false as const,
+        error:
+          "Upload de vídeo exige SUPABASE_SERVICE_ROLE_KEY no servidor (URL assinada).",
       };
     }
 
@@ -49,9 +59,8 @@ export const createVideoUploadSlot = createServerFn({ method: "POST" })
 
     const ext = extFromVideo(type, data.fileName || "");
     const path = `${crypto.randomUUID()}.${ext}`;
-    const client = getSupabaseAdminClient() || getSupabaseServerClient();
 
-    const { data: signed, error } = await client.storage
+    const { data: signed, error } = await admin.storage
       .from("videos")
       .createSignedUploadUrl(path);
 
@@ -60,15 +69,28 @@ export const createVideoUploadSlot = createServerFn({ method: "POST" })
         ok: false as const,
         error:
           error?.message ||
-          "Não foi possível criar URL de upload. Confira o bucket 'videos' e SUPABASE_SERVICE_ROLE_KEY.",
-        fallbackAnon: true as const,
-        path,
+          "Não foi possível criar URL de upload. Confira o bucket 'videos'.",
       };
+    }
+
+    const finalPath = signed.path || path;
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const { error: slotError } = await admin.from("video_upload_slots").upsert({
+      path: finalPath,
+      expires_at: expiresAt,
+      consumed_at: null,
+      created_at: new Date().toISOString(),
+    } as never);
+
+    if (slotError) {
+      // Migration 007 ainda não aplicada — upload assinado ainda funciona,
+      // mas submit rejeitará videoPath até aplicar a migration.
+      console.warn("[video slot]", slotError.message);
     }
 
     return {
       ok: true as const,
-      path: signed.path || path,
+      path: finalPath,
       token: signed.token,
     };
   });

@@ -171,20 +171,78 @@ export const createCollectLink = createServerFn({ method: "POST" })
 export const resolveCollectToken = createServerFn({ method: "GET" })
   .validator(z.object({ token: z.string().min(8) }))
   .handler(async ({ data }) => {
-    const { isSupabaseEnabled, getSupabaseServerClient } = await import(
-      "./supabase.server"
-    );
+    const { isSupabaseEnabled } = await import("./supabase.server");
 
     if (isSupabaseEnabled()) {
-      const supabase = getSupabaseServerClient();
-      const { data: link, error } = await supabase
+      const { getSupabasePublicClient, getSupabaseServerClient } = await import(
+        "./supabase.server"
+      );
+      const supabase = getSupabasePublicClient();
+
+      const { data: rpcRows, error: rpcError } = await supabase.rpc(
+        "resolve_collect_link",
+        { p_token: data.token },
+      );
+      const resolved = Array.isArray(rpcRows) ? rpcRows[0] : rpcRows;
+
+      if (!rpcError && resolved) {
+        if (!resolved.ok) {
+          // token pode ser slug legado
+          const { getProjectBySlug } = await import("./projects");
+          const project = await getProjectBySlug({ data: { slug: data.token } });
+          if (project) {
+            return {
+              ok: true as const,
+              slug: project.slug,
+              project,
+              magic: false as const,
+            };
+          }
+          return {
+            ok: false as const,
+            error: resolved.error || "Link inválido ou expirado.",
+          };
+        }
+
+        const { mapProjectWithCount } = await import("./mappers");
+        const { resolveLogoUrl } = await import("./logos.server");
+        const logoUrl = await resolveLogoUrl(
+          resolved.logo_url || resolved.project_id,
+        );
+
+        return {
+          ok: true as const,
+          slug: resolved.project_slug,
+          token: data.token,
+          magic: true as const,
+          project: {
+            ...mapProjectWithCount(
+              {
+                id: resolved.project_id,
+                owner_id: "",
+                name: resolved.project_name,
+                slug: resolved.project_slug,
+                description: resolved.description || "",
+                color: resolved.color,
+                logo_url: resolved.logo_url,
+                created_at: "",
+              },
+              0,
+              logoUrl,
+            ),
+          },
+        };
+      }
+
+      // Fallback se migration 007 ainda não aplicada
+      const legacy = getSupabaseServerClient();
+      const { data: link, error } = await legacy
         .from("collect_links")
         .select("*, projects(slug, name, color, logo_url, description)")
         .eq("token", data.token)
         .maybeSingle();
 
       if (error || !link) {
-        // token pode ser slug legado
         const { getProjectBySlug } = await import("./projects");
         const project = await getProjectBySlug({ data: { slug: data.token } });
         if (project) {

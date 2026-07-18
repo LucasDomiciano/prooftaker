@@ -120,13 +120,7 @@ function CollectPage() {
             if (videoFile) {
               const uploaded = await uploadCollectVideo(videoFile);
               if (!uploaded.ok) {
-                if (uploaded.useServerUpload) {
-                  setError(
-                    "Upload de vídeo exige Supabase Storage. Confira VITE_SUPABASE_URL / ANON_KEY e o bucket 'videos'.",
-                  );
-                } else {
-                  setError(uploaded.error);
-                }
+                setError(uploaded.error);
                 return;
               }
               videoPath = uploaded.path;

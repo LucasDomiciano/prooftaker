@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { createVideoUploadSlot } from "./video-upload.server";
-import { isSafeVideoPath, validateVideoFile } from "./video-upload";
+import { validateVideoFile } from "./video-upload";
 
 function getBrowserSupabase() {
   const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
@@ -12,17 +12,12 @@ function getBrowserSupabase() {
 }
 
 /**
- * Sobe o vídeo direto no Supabase Storage (browser → Storage),
- * sem passar o arquivo pela função serverless da Vercel.
- *
- * Não use o sufixo `.client.ts`: rotas SSR não podem importar `*.client.*`.
+ * Sobe o vídeo direto no Supabase Storage via URL assinada
+ * (browser → Storage), sem passar pela Vercel e sem insert anon.
  */
 export async function uploadCollectVideo(
   file: File,
-): Promise<
-  | { ok: true; path: string }
-  | { ok: false; error: string; useServerUpload?: boolean }
-> {
+): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
   const check = validateVideoFile(file);
   if (!check.ok) return check;
 
@@ -30,8 +25,7 @@ export async function uploadCollectVideo(
   if (!supabase) {
     return {
       ok: false,
-      error: "Supabase não configurado no client.",
-      useServerUpload: true,
+      error: "Supabase não configurado no client (VITE_SUPABASE_URL / ANON_KEY).",
     };
   }
 
@@ -43,49 +37,25 @@ export async function uploadCollectVideo(
     },
   });
 
-  if (slot.ok) {
-    const { error } = await supabase.storage
-      .from("videos")
-      .uploadToSignedUrl(slot.path, slot.token, file, {
-        contentType: file.type || "video/webm",
-        upsert: true,
-      });
-    if (error) {
-      return {
-        ok: false,
-        error:
-          error.message ||
-          "Falha no upload do vídeo. Confira se o bucket 'videos' existe.",
-      };
-    }
-    return { ok: true, path: slot.path };
+  if (!slot.ok) {
+    return { ok: false, error: slot.error };
   }
 
-  // Fallback: policy anon insert (migration 001)
-  if ("fallbackAnon" in slot && slot.fallbackAnon && slot.path) {
-    if (!isSafeVideoPath(slot.path)) {
-      return { ok: false, error: "Caminho de vídeo inválido." };
-    }
-    const { error } = await supabase.storage
-      .from("videos")
-      .upload(slot.path, file, {
-        contentType: file.type || "video/webm",
-        upsert: true,
-      });
-    if (error) {
-      return {
-        ok: false,
-        error:
-          error.message ||
-          "Falha no upload. Aplique a migration do bucket 'videos' e a policy de insert.",
-      };
-    }
-    return { ok: true, path: slot.path };
+  const { error } = await supabase.storage
+    .from("videos")
+    .uploadToSignedUrl(slot.path, slot.token, file, {
+      contentType: file.type || "video/webm",
+      upsert: true,
+    });
+
+  if (error) {
+    return {
+      ok: false,
+      error:
+        error.message ||
+        "Falha no upload do vídeo. Confira se o bucket 'videos' existe.",
+    };
   }
 
-  if ("fallbackServer" in slot && slot.fallbackServer) {
-    return { ok: false, error: slot.error, useServerUpload: true };
-  }
-
-  return { ok: false, error: slot.error };
+  return { ok: true, path: slot.path };
 }
