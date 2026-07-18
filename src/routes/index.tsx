@@ -4,10 +4,8 @@ import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { Stars } from "@/components/stars";
 import type { Testimonial } from "@/lib/types";
-import { getLandingTestimonials } from "@/lib/testimonials";
 
 export const Route = createFileRoute("/")({
-  loader: () => getLandingTestimonials(),
   head: () => ({
     meta: [
       { title: "ProofTaker — Depoimentos que fecham venda" },
@@ -22,8 +20,8 @@ export const Route = createFileRoute("/")({
 });
 
 function Landing() {
-  const featured = Route.useLoaderData();
-  const wall = featured.length > 0 ? featured : FALLBACK_QUOTES;
+  // Só exemplos até haver depoimentos do ProofTaker com opt-in
+  const wall = FALLBACK_QUOTES;
 
   return (
     <div className="min-h-screen bg-[#f4f7f6] text-foreground">
