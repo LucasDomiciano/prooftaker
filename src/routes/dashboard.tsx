@@ -1,13 +1,24 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { Check, Filter, MessageSquare, Search, Star, TrendingUp, Video, X } from "lucide-react";
+import {
+  Check,
+  Filter,
+  MessageSquare,
+  Search,
+  Sparkles,
+  Star,
+  TrendingUp,
+  Video,
+  X,
+} from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { PlanLimitBanner } from "@/components/plan-limit-banner";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Stars } from "@/components/stars";
-import { moderateTestimonial } from "@/lib/testimonials";
+import { Input } from "@/components/ui/input";
+import { moderateTestimonial, improveTestimonialText } from "@/lib/testimonials";
 import { loadDashboardPage } from "@/lib/app-loaders";
+import type { Testimonial } from "@/lib/types";
 
 export const Route = createFileRoute("/dashboard")({
   loader: () => loadDashboardPage(),
@@ -19,16 +30,26 @@ function Dashboard() {
   const { user, projects, testimonials, billing } = Route.useLoaderData();
   const router = useRouter();
   const [projectFilter, setProjectFilter] = useState<string>("all");
-  const [statusFilter, setStatusFilter] = useState<"all" | "aprovado" | "pendente">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "aprovado" | "pendente">(
+    "all",
+  );
   const [q, setQ] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
+  const [versionById, setVersionById] = useState<
+    Record<string, "original" | "improved">
+  >({});
 
   const list = useMemo(() => {
     return testimonials.filter((t) => {
       if (projectFilter !== "all" && t.projectId !== projectFilter) return false;
       if (statusFilter !== "all" && t.status !== statusFilter) return false;
-      if (q && !`${t.name} ${t.company} ${t.text}`.toLowerCase().includes(q.toLowerCase())) {
+      if (
+        q &&
+        !`${t.name} ${t.company} ${t.text} ${t.textOriginal}`.toLowerCase().includes(
+          q.toLowerCase(),
+        )
+      ) {
         return false;
       }
       return true;
@@ -49,11 +70,34 @@ function Dashboard() {
 
   const projectMap = Object.fromEntries(projects.map((p) => [p.id, p]));
 
-  const moderate = async (id: string, status: "aprovado" | "recusado") => {
+  const chosenVersion = (t: Testimonial) =>
+    versionById[t.id] ||
+    (t.textImproved && t.textImproved !== t.textOriginal ? "improved" : "original");
+
+  const moderate = async (
+    id: string,
+    status: "aprovado" | "recusado",
+    publishVersion?: "original" | "improved",
+  ) => {
     setBusyId(id);
     try {
-      await moderateTestimonial({ data: { id, status } });
+      await moderateTestimonial({
+        data: { id, status, publishVersion },
+      });
       await router.invalidate();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const regenerate = async (id: string) => {
+    setBusyId(id);
+    try {
+      const result = await improveTestimonialText({ data: { id } });
+      if (result.ok) {
+        setVersionById((prev) => ({ ...prev, [id]: "improved" }));
+        await router.invalidate();
+      }
     } finally {
       setBusyId(null);
     }
@@ -132,6 +176,17 @@ function Dashboard() {
         )}
         {list.map((t) => {
           const project = projectMap[t.projectId];
+          const version = chosenVersion(t);
+          const original = t.textOriginal || t.text;
+          const improved = t.textImproved;
+          const hasAiDiff = Boolean(improved && improved !== original);
+          const preview =
+            t.status === "pendente" && hasAiDiff
+              ? version === "improved"
+                ? improved!
+                : original
+              : t.text;
+
           return (
             <div
               key={t.id}
@@ -168,9 +223,51 @@ function Dashboard() {
                     {project && <span>· {project.name}</span>}
                     <span>· {new Date(t.createdAt).toLocaleDateString("pt-BR")}</span>
                   </div>
-                  <p className="mt-3 text-[15px] leading-relaxed text-foreground">
-                    "{t.text}"
-                  </p>
+
+                  {t.status === "pendente" && hasAiDiff ? (
+                    <div className="mt-4 space-y-3">
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setVersionById((p) => ({ ...p, [t.id]: "original" }))
+                          }
+                          className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                            version === "original"
+                              ? "border-primary bg-brand-soft text-primary"
+                              : "text-muted-foreground hover:bg-muted"
+                          }`}
+                        >
+                          Original do cliente
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setVersionById((p) => ({ ...p, [t.id]: "improved" }))
+                          }
+                          className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                            version === "improved"
+                              ? "border-primary bg-brand-soft text-primary"
+                              : "text-muted-foreground hover:bg-muted"
+                          }`}
+                        >
+                          <Sparkles className="size-3" /> Versão IA
+                        </button>
+                      </div>
+                      <p className="text-[15px] leading-relaxed text-foreground">
+                        “{preview}”
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        A IA só melhora clareza e gramática — o sentido permanece o do
+                        cliente. Você escolhe o que publica.
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-[15px] leading-relaxed text-foreground">
+                      “{preview}”
+                    </p>
+                  )}
+
                   {t.hasVideo && t.videoPath && (
                     <div className="mt-3">
                       {playingId === t.id ? (
@@ -194,18 +291,6 @@ function Dashboard() {
                       )}
                     </div>
                   )}
-                  {t.tags.length > 0 && (
-                    <div className="mt-3 flex flex-wrap gap-1.5">
-                      {t.tags.map((tag) => (
-                        <span
-                          key={tag}
-                          className="rounded-full border px-2 py-0.5 text-xs text-muted-foreground"
-                        >
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  )}
                 </div>
                 <div className="flex gap-2 md:flex-col">
                   {t.status === "pendente" ? (
@@ -214,7 +299,9 @@ function Dashboard() {
                         size="sm"
                         className="bg-success text-success-foreground hover:bg-success/90"
                         disabled={busyId === t.id}
-                        onClick={() => moderate(t.id, "aprovado")}
+                        onClick={() =>
+                          void moderate(t.id, "aprovado", chosenVersion(t))
+                        }
                       >
                         <Check className="size-4" /> Aprovar
                       </Button>
@@ -222,7 +309,15 @@ function Dashboard() {
                         size="sm"
                         variant="outline"
                         disabled={busyId === t.id}
-                        onClick={() => moderate(t.id, "recusado")}
+                        onClick={() => void regenerate(t.id)}
+                      >
+                        <Sparkles className="size-4" /> Melhorar IA
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busyId === t.id}
+                        onClick={() => void moderate(t.id, "recusado")}
                       >
                         <X className="size-4" /> Recusar
                       </Button>

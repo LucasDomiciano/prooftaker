@@ -143,23 +143,66 @@ export const submitTestimonial = createServerFn({ method: "POST" })
         hasVideo = true;
       }
 
-      const { data: created, error } = await supabase
-        .from("testimonials")
-        .insert({
-          id,
-          project_id: quota.project_id,
-          name: data.name.trim(),
-          role: data.role?.trim() || "",
-          company: data.company?.trim() || "",
-          text: data.text.trim(),
-          rating: data.rating,
-          has_video: hasVideo,
-          video_path: videoPath,
-          status: "pendente",
-          tags: [],
-        })
-        .select("*")
-        .single();
+      const original = data.text.trim();
+      const { improveTestimonialCopy } = await import("./ai.server");
+      const { improved } = await improveTestimonialCopy(original);
+
+      let created: {
+        id: string;
+        name: string;
+        rating: number;
+        text: string;
+        status: string;
+        has_video: boolean;
+      } | null = null;
+      let error: { message: string; code?: string } | null = null;
+
+      {
+        const res = await supabase
+          .from("testimonials")
+          .insert({
+            id,
+            project_id: quota.project_id,
+            name: data.name.trim(),
+            role: data.role?.trim() || "",
+            company: data.company?.trim() || "",
+            text: original,
+            text_original: original,
+            text_improved: improved,
+            rating: data.rating,
+            has_video: hasVideo,
+            video_path: videoPath,
+            status: "pendente",
+            tags: [],
+          })
+          .select("*")
+          .single();
+        created = res.data;
+        error = res.error;
+      }
+
+      // Migration 005 ainda não aplicada
+      if (error && /text_original|text_improved|column/i.test(error.message)) {
+        const res = await supabase
+          .from("testimonials")
+          .insert({
+            id,
+            project_id: quota.project_id,
+            name: data.name.trim(),
+            role: data.role?.trim() || "",
+            company: data.company?.trim() || "",
+            text: original,
+            rating: data.rating,
+            has_video: hasVideo,
+            video_path: videoPath,
+            status: "pendente",
+            tags: [],
+          })
+          .select("*")
+          .single();
+        created = res.data;
+        error = res.error;
+      }
 
       if (error || !created) {
         return {
@@ -280,13 +323,19 @@ export const submitTestimonial = createServerFn({ method: "POST" })
       hasVideo = true;
     }
 
+    const original = data.text.trim();
+    const { improveTestimonialCopy } = await import("./ai.server");
+    const { improved } = await improveTestimonialCopy(original);
+
     const testimonial: Testimonial = {
       id,
       projectId: project.id,
       name: data.name.trim(),
       role: data.role?.trim() || "",
       company: data.company?.trim() || "",
-      text: data.text.trim(),
+      text: original,
+      textOriginal: original,
+      textImproved: improved,
       rating: data.rating,
       hasVideo,
       videoPath,
@@ -347,6 +396,8 @@ export const submitTestimonial = createServerFn({ method: "POST" })
 const moderateSchema = z.object({
   id: z.string().min(1),
   status: z.enum(["aprovado", "recusado"]),
+  /** Qual versão publicar ao aprovar */
+  publishVersion: z.enum(["original", "improved"]).optional(),
 });
 
 export const moderateTestimonial = createServerFn({ method: "POST" })
@@ -363,7 +414,7 @@ export const moderateTestimonial = createServerFn({ method: "POST" })
       const supabase = getSupabaseServerClient();
       const { data: testimonial } = await supabase
         .from("testimonials")
-        .select("id, project_id")
+        .select("id, project_id, text, text_original, text_improved")
         .eq("id", data.id)
         .maybeSingle();
       if (!testimonial) {
@@ -379,9 +430,21 @@ export const moderateTestimonial = createServerFn({ method: "POST" })
         return { ok: false as const, error: "Sem permissão." };
       }
 
+      const patch: {
+        status: "aprovado" | "recusado";
+        text?: string;
+      } = { status: data.status };
+
+      if (data.status === "aprovado") {
+        const original = testimonial.text_original || testimonial.text;
+        const improved = testimonial.text_improved || original;
+        const version = data.publishVersion || "improved";
+        patch.text = version === "original" ? original : improved;
+      }
+
       const { data: updated, error } = await supabase
         .from("testimonials")
-        .update({ status: data.status })
+        .update(patch)
         .eq("id", data.id)
         .select("*, projects(id, name, slug)")
         .single();
@@ -431,7 +494,14 @@ export const moderateTestimonial = createServerFn({ method: "POST" })
 
     await updateDb((store) => {
       const item = store.testimonials.find((t) => t.id === data.id);
-      if (item) item.status = data.status;
+      if (!item) return;
+      item.status = data.status;
+      if (data.status === "aprovado") {
+        const original = item.textOriginal || item.text;
+        const improved = item.textImproved || original;
+        const version = data.publishVersion || "improved";
+        item.text = version === "original" ? original : improved;
+      }
     });
 
     try {
@@ -558,3 +628,10 @@ export const getLandingTestimonials = createServerFn({ method: "GET" }).handler(
       .slice(0, 12);
   },
 );
+
+export const improveTestimonialText = createServerFn({ method: "POST" })
+  .validator(z.object({ id: z.string().min(1) }))
+  .handler(async ({ data }) => {
+    const { runImproveTestimonialById } = await import("./ai.server");
+    return runImproveTestimonialById(data.id);
+  });

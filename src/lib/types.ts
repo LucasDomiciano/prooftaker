@@ -27,7 +27,12 @@ export type Testimonial = {
   role: string;
   company: string;
   avatarUrl?: string;
+  /** Texto publicado (mural/widgets) */
   text: string;
+  /** Texto original do cliente */
+  textOriginal: string;
+  /** Versão melhorada por IA (opcional) */
+  textImproved?: string;
   rating: number;
   hasVideo: boolean;
   videoPath?: string;

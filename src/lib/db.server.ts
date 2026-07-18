@@ -177,7 +177,14 @@ async function seedStore(): Promise<Store> {
     },
   ];
 
-  return { users, projects, testimonials };
+  return {
+    users,
+    projects,
+    testimonials: testimonials.map((t) => ({
+      ...t,
+      textOriginal: t.textOriginal || t.text,
+    })),
+  };
 }
 
 async function loadStore(): Promise<Store> {
@@ -214,7 +221,10 @@ export async function readDb(): Promise<Store> {
   return {
     users: [...store.users],
     projects: [...store.projects],
-    testimonials: [...store.testimonials],
+    testimonials: store.testimonials.map((t) => ({
+      ...t,
+      textOriginal: t.textOriginal || t.text,
+    })),
   };
 }
 

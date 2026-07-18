@@ -159,3 +159,133 @@ JSON: {"subject":"...","message":"..."}`;
       return { ok: false as const, error: "Falha ao gerar com IA." };
     }
   });
+
+/** Melhora gramática/clareza sem mudar o sentido. */
+export async function improveTestimonialCopy(original: string): Promise<{
+  improved: string;
+  mode: "ai" | "local";
+}> {
+  const cleaned = original.trim().replace(/\s+/g, " ");
+  const localPolish = (() => {
+    let t = cleaned;
+    if (t.length) t = t.charAt(0).toUpperCase() + t.slice(1);
+    if (t.length && !/[.!?…]$/.test(t)) t = `${t}.`;
+    return t;
+  })();
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return { improved: localPolish, mode: "local" };
+  }
+
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+        temperature: 0.3,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: `Você edita depoimentos de clientes em português do Brasil.
+Regras obrigatórias:
+- Corrija gramática, ortografia e pontuação
+- Melhore clareza e fluidez
+- Remova repetições
+- Torne o texto um pouco mais persuasivo SEM inventar fatos, números, nomes ou resultados
+- NUNCA altere o sentido nem adicione benefícios que não estejam no original
+- Mantenha a voz em 1ª pessoa do cliente
+- Responda só JSON: {"improved":"..."}`,
+          },
+          {
+            role: "user",
+            content: `Depoimento original:\n"""${cleaned}"""`,
+          },
+        ],
+      }),
+    });
+
+    if (!res.ok) {
+      console.error("[ProofTaker AI improve]", await res.text());
+      return { improved: localPolish, mode: "local" };
+    }
+
+    const json = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    const content = json.choices?.[0]?.message?.content || "{}";
+    const parsed = JSON.parse(content) as { improved?: string };
+    const improved = (parsed.improved || "").trim();
+    if (!improved || improved.length < 8) {
+      return { improved: localPolish, mode: "local" };
+    }
+    return { improved, mode: "ai" };
+  } catch (e) {
+    console.error("[ProofTaker AI improve]", e);
+    return { improved: localPolish, mode: "local" };
+  }
+}
+
+export async function runImproveTestimonialById(id: string) {
+  const { getUserFromSession } = await import("./auth.server");
+  const user = await getUserFromSession();
+  if (!user) return { ok: false as const, error: "Não autenticado." };
+
+  const { isSupabaseEnabled, getSupabaseServerClient } = await import(
+    "./supabase.server"
+  );
+
+  if (isSupabaseEnabled()) {
+    const supabase = getSupabaseServerClient();
+    const { data: row } = await supabase
+      .from("testimonials")
+      .select("id, project_id, text, text_original")
+      .eq("id", id)
+      .maybeSingle();
+    if (!row) return { ok: false as const, error: "Depoimento não encontrado." };
+
+    const { data: project } = await supabase
+      .from("projects")
+      .select("owner_id")
+      .eq("id", row.project_id)
+      .maybeSingle();
+    if (!project || project.owner_id !== user.id) {
+      return { ok: false as const, error: "Sem permissão." };
+    }
+
+    const original = row.text_original || row.text;
+    const { improved, mode } = await improveTestimonialCopy(original);
+    const { error } = await supabase
+      .from("testimonials")
+      .update({ text_improved: improved })
+      .eq("id", id);
+    if (error) return { ok: false as const, error: error.message };
+    return { ok: true as const, improved, mode };
+  }
+
+  const { readDb, updateDb } = await import("./db.server");
+  const db = await readDb();
+  const item = db.testimonials.find((t) => t.id === id);
+  if (!item) return { ok: false as const, error: "Depoimento não encontrado." };
+  const project = db.projects.find((p) => p.id === item.projectId);
+  if (!project || project.ownerId !== user.id) {
+    return { ok: false as const, error: "Sem permissão." };
+  }
+
+  const original = item.textOriginal || item.text;
+  const { improved, mode } = await improveTestimonialCopy(original);
+  await updateDb((store) => {
+    const t = store.testimonials.find((x) => x.id === id);
+    if (t) t.textImproved = improved;
+  });
+  return { ok: true as const, improved, mode };
+}
+
+export const improveTestimonialById = createServerFn({ method: "POST" })
+  .validator(z.object({ id: z.string().min(1) }))
+  .handler(async ({ data }) => runImproveTestimonialById(data.id));

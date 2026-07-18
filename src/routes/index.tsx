@@ -525,4 +525,4 @@ const FALLBACK_QUOTES: Testimonial[] = [
     tags: [],
     createdAt: new Date().toISOString(),
   },
-];
+].map((t) => ({ ...t, textOriginal: t.text }));

@@ -33,6 +33,8 @@ type TestimonialRow = {
   company: string;
   avatar_url?: string | null;
   text: string;
+  text_original?: string | null;
+  text_improved?: string | null;
   rating: number;
   has_video: boolean;
   video_path?: string | null;
@@ -82,6 +84,7 @@ export function mapProjectWithCount(
 }
 
 export function mapTestimonial(row: TestimonialRow): Testimonial {
+  const original = row.text_original || row.text;
   return {
     id: row.id,
     projectId: row.project_id,
@@ -90,6 +93,8 @@ export function mapTestimonial(row: TestimonialRow): Testimonial {
     company: row.company,
     avatarUrl: row.avatar_url || undefined,
     text: row.text,
+    textOriginal: original,
+    textImproved: row.text_improved || undefined,
     rating: row.rating,
     hasVideo: row.has_video,
     videoPath: row.video_path || undefined,

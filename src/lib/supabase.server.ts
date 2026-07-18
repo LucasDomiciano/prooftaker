@@ -55,6 +55,8 @@ export type Database = {
           company: string;
           avatar_url: string | null;
           text: string;
+          text_original?: string | null;
+          text_improved?: string | null;
           rating: number;
           has_video: boolean;
           video_path: string | null;
@@ -70,6 +72,8 @@ export type Database = {
           company?: string;
           avatar_url?: string | null;
           text: string;
+          text_original?: string | null;
+          text_improved?: string | null;
           rating: number;
           has_video?: boolean;
           video_path?: string | null;
