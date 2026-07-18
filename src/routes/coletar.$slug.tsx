@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { VideoCapture } from "@/components/video-capture";
 import { getProjectBySlug } from "@/lib/projects";
 import { submitTestimonial } from "@/lib/testimonials";
-import { uploadCollectVideo } from "@/lib/videos.client";
+import { uploadCollectVideo } from "@/lib/upload-collect-video";
 
 export const Route = createFileRoute("/coletar/$slug")({
   validateSearch: z.object({

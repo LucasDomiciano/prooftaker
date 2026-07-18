@@ -14,6 +14,8 @@ function getBrowserSupabase() {
 /**
  * Sobe o vídeo direto no Supabase Storage (browser → Storage),
  * sem passar o arquivo pela função serverless da Vercel.
+ *
+ * Não use o sufixo `.client.ts`: rotas SSR não podem importar `*.client.*`.
  */
 export async function uploadCollectVideo(
   file: File,
