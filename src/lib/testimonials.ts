@@ -208,22 +208,30 @@ async function runSubmitTestimonial(data: {
       }
 
       if (ownerEmail) {
-        await notifyOwnerNewTestimonial({
-          ownerEmail,
-          ownerName: quota.owner_name,
-          projectName: quota.project_name,
-          authorName: created.name,
-          rating: created.rating,
-          notify: quota.notify_new,
-        });
+        try {
+          await notifyOwnerNewTestimonial({
+            ownerEmail,
+            ownerName: quota.owner_name,
+            projectName: quota.project_name,
+            authorName: created.name,
+            rating: created.rating,
+            notify: quota.notify_new,
+          });
+        } catch (e) {
+          console.error("[notify owner]", e);
+        }
       }
 
       if (data.authorEmail) {
-        await notifyAuthorThanks({
-          authorEmail: data.authorEmail,
-          authorName: created.name,
-          projectName: quota.project_name,
-        });
+        try {
+          await notifyAuthorThanks({
+            authorEmail: data.authorEmail,
+            authorName: created.name,
+            projectName: quota.project_name,
+          });
+        } catch (e) {
+          console.error("[notify author]", e);
+        }
       }
 
       // Integrações Slack / Zapier

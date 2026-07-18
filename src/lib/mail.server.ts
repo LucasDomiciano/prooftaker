@@ -5,16 +5,40 @@ type MailPayload = {
   text: string;
 };
 
+/** Só loga em disco no dev local — na Vercel /var/task é read-only. */
 async function appendMailLog(payload: MailPayload) {
-  const { appendFileSync, existsSync, mkdirSync } = await import("node:fs");
-  const { join } = await import("node:path");
-  const dir = join(process.cwd(), ".data");
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  appendFileSync(
-    join(dir, "mail.log"),
-    `\n[${new Date().toISOString()}] to=${payload.to} subject=${payload.subject}\n${payload.text}\n`,
-    "utf8",
-  );
+  try {
+    // Serverless (Vercel): não há FS gravável em process.cwd()
+    if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+      console.info(
+        "[ProofTaker mail]",
+        payload.subject,
+        "→",
+        payload.to,
+        "\n",
+        payload.text,
+      );
+      return;
+    }
+
+    const { appendFileSync, existsSync, mkdirSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const dir = join(process.cwd(), ".data");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    appendFileSync(
+      join(dir, "mail.log"),
+      `\n[${new Date().toISOString()}] to=${payload.to} subject=${payload.subject}\n${payload.text}\n`,
+      "utf8",
+    );
+  } catch (err) {
+    console.info(
+      "[ProofTaker mail] (log skip)",
+      payload.subject,
+      "→",
+      payload.to,
+      err,
+    );
+  }
 }
 
 export async function sendEmail(payload: MailPayload) {
