@@ -151,12 +151,12 @@ export const getProjectById = createServerFn({ method: "GET" })
 export const getProjectBySlug = createServerFn({ method: "GET" })
   .validator(z.object({ slug: z.string().min(1) }))
   .handler(async ({ data }) => {
-    const { isSupabaseEnabled, getSupabaseServerClient } = await import(
+    const { isSupabaseEnabled, getSupabasePublicClient } = await import(
       "./supabase.server"
     );
 
     if (isSupabaseEnabled()) {
-      const supabase = getSupabaseServerClient();
+      const supabase = getSupabasePublicClient();
       const { data: project } = await supabase
         .from("projects")
         .select("*")

@@ -59,69 +59,73 @@ export const listTestimonials = createServerFn({ method: "GET" }).handler(
   },
 );
 
-function parseSubmitForm(formData: FormData) {
-  const rating = Number(formData.get("rating") || 5);
-  const video = formData.get("video");
-  return {
-    slug: String(formData.get("slug") || ""),
-    name: String(formData.get("name") || ""),
-    role: String(formData.get("role") || ""),
-    company: String(formData.get("company") || ""),
-    text: String(formData.get("text") || ""),
-    rating: Number.isFinite(rating) ? rating : 5,
-    authorEmail: String(formData.get("authorEmail") || "") || undefined,
-    magicToken: String(formData.get("magicToken") || "") || undefined,
-    video: video instanceof File && video.size > 0 ? video : null,
-  };
-}
+const submitSchema = z.object({
+  slug: z.string().min(1),
+  name: z.string().min(2),
+  role: z.string().optional(),
+  company: z.string().optional(),
+  text: z.string().min(10),
+  rating: z.number().int().min(1).max(5),
+  authorEmail: z.string().email().optional().or(z.literal("")),
+  magicToken: z.string().optional(),
+  videoPath: z.string().optional(),
+});
 
 export const submitTestimonial = createServerFn({ method: "POST" })
-  .validator((formData: FormData) => {
-    const parsed = parseSubmitForm(formData);
-    const schema = z.object({
-      slug: z.string().min(1),
-      name: z.string().min(2),
-      role: z.string().optional(),
-      company: z.string().optional(),
-      text: z.string().min(10),
-      rating: z.number().int().min(1).max(5),
-      authorEmail: z.string().email().optional().or(z.literal("")),
-      magicToken: z.string().optional(),
-    });
-    const base = schema.parse({
-      slug: parsed.slug,
-      name: parsed.name,
-      role: parsed.role || undefined,
-      company: parsed.company || undefined,
-      text: parsed.text,
-      rating: parsed.rating,
-      authorEmail: parsed.authorEmail || undefined,
-      magicToken: parsed.magicToken,
-    });
-    return {
-      ...base,
-      authorEmail: base.authorEmail || undefined,
-      video: parsed.video,
-    };
-  })
+  .validator(submitSchema)
   .handler(async ({ data }) => {
-    const { isSupabaseEnabled, getSupabaseServerClient } = await import(
-      "./supabase.server"
-    );
+    try {
+      return await runSubmitTestimonial({
+        ...data,
+        authorEmail: data.authorEmail || undefined,
+        role: data.role || undefined,
+        company: data.company || undefined,
+        magicToken: data.magicToken || undefined,
+        videoPath: data.videoPath || undefined,
+      });
+    } catch (err) {
+      console.error("[submitTestimonial]", err);
+      const message =
+        err instanceof Error ? err.message : "Não foi possível salvar o depoimento.";
+      return { ok: false as const, error: message };
+    }
+  });
+
+async function runSubmitTestimonial(data: {
+  slug: string;
+  name: string;
+  role?: string;
+  company?: string;
+  text: string;
+  rating: number;
+  authorEmail?: string;
+  magicToken?: string;
+  videoPath?: string;
+}) {
+    const {
+      isSupabaseEnabled,
+      getSupabasePublicClient,
+      getSupabaseAdminClient,
+    } = await import("./supabase.server");
     const { notifyOwnerNewTestimonial, notifyAuthorThanks } = await import(
       "./mail.server"
     );
-    const { saveUploadedVideo } = await import("./videos.server");
 
     if (isSupabaseEnabled()) {
-      const supabase = getSupabaseServerClient();
-      const { data: quotaRows, error: quotaError } = await supabase.rpc(
+      // Sem cookies: coleta é pública e não depende de sessão
+      const writer = getSupabasePublicClient();
+      const { data: quotaRows, error: quotaError } = await writer.rpc(
         "get_collect_quota",
         { p_slug: data.slug },
       );
       const quota = Array.isArray(quotaRows) ? quotaRows[0] : quotaRows;
       if (quotaError || !quota) {
-        return { ok: false as const, error: "Projeto não encontrado." };
+        return {
+          ok: false as const,
+          error: quotaError?.message
+            ? `Projeto não encontrado (${quotaError.message})`
+            : "Projeto não encontrado.",
+        };
       }
 
       const limit = testimonialLimitFor(quota.plan as "Free" | "Starter" | "Pro");
@@ -136,10 +140,12 @@ export const submitTestimonial = createServerFn({ method: "POST" })
       let videoPath: string | null = null;
       let hasVideo = false;
 
-      if (data.video) {
-        const saved = await saveUploadedVideo(data.video, id);
-        if (!saved.ok) return { ok: false as const, error: saved.error };
-        videoPath = saved.path;
+      if (data.videoPath) {
+        const { isSafeVideoPath } = await import("./video-upload");
+        if (!isSafeVideoPath(data.videoPath)) {
+          return { ok: false as const, error: "Caminho de vídeo inválido." };
+        }
+        videoPath = data.videoPath;
         hasVideo = true;
       }
 
@@ -147,71 +153,51 @@ export const submitTestimonial = createServerFn({ method: "POST" })
       const { improveTestimonialCopy } = await import("./ai.server");
       const { improved } = await improveTestimonialCopy(original);
 
-      let created: {
-        id: string;
-        name: string;
-        rating: number;
-        text: string;
-        status: string;
-        has_video: boolean;
-      } | null = null;
+      const rowBase = {
+        id,
+        project_id: quota.project_id as string,
+        name: data.name.trim(),
+        role: data.role?.trim() || "",
+        company: data.company?.trim() || "",
+        text: original,
+        rating: data.rating,
+        has_video: hasVideo,
+        video_path: videoPath,
+        status: "pendente" as const,
+        tags: [] as string[],
+      };
+
+      // Insert sem .select(): anon não consegue ler status "pendente" (RLS)
       let error: { message: string; code?: string } | null = null;
-
       {
-        const res = await supabase
-          .from("testimonials")
-          .insert({
-            id,
-            project_id: quota.project_id,
-            name: data.name.trim(),
-            role: data.role?.trim() || "",
-            company: data.company?.trim() || "",
-            text: original,
-            text_original: original,
-            text_improved: improved,
-            rating: data.rating,
-            has_video: hasVideo,
-            video_path: videoPath,
-            status: "pendente",
-            tags: [],
-          })
-          .select("*")
-          .single();
-        created = res.data;
+        const res = await writer.from("testimonials").insert({
+          ...rowBase,
+          text_original: original,
+          text_improved: improved,
+        });
         error = res.error;
       }
 
-      // Migration 005 ainda não aplicada
       if (error && /text_original|text_improved|column/i.test(error.message)) {
-        const res = await supabase
-          .from("testimonials")
-          .insert({
-            id,
-            project_id: quota.project_id,
-            name: data.name.trim(),
-            role: data.role?.trim() || "",
-            company: data.company?.trim() || "",
-            text: original,
-            rating: data.rating,
-            has_video: hasVideo,
-            video_path: videoPath,
-            status: "pendente",
-            tags: [],
-          })
-          .select("*")
-          .single();
-        created = res.data;
+        const res = await writer.from("testimonials").insert(rowBase);
         error = res.error;
       }
 
-      if (error || !created) {
+      if (error) {
         return {
           ok: false as const,
-          error: error?.message || "Não foi possível salvar o depoimento.",
+          error: error.message || "Não foi possível salvar o depoimento.",
         };
       }
 
-      const { getSupabaseAdminClient } = await import("./supabase.server");
+      const created = {
+        ...rowBase,
+        text_original: original,
+        text_improved: improved,
+        avatar_url: null as string | null,
+        created_at: new Date().toISOString().slice(0, 10),
+      };
+
       const admin = getSupabaseAdminClient();
       let ownerEmail = "";
       if (admin) {
@@ -243,7 +229,7 @@ export const submitTestimonial = createServerFn({ method: "POST" })
       // Integrações Slack / Zapier
       try {
         const { notifyIntegrations } = await import("./integrations.server");
-        const { data: profile } = await supabase
+        const { data: profile } = await writer
           .from("profiles")
           .select("slack_webhook_url, outbound_webhooks")
           .eq("id", quota.owner_id)
@@ -276,13 +262,9 @@ export const submitTestimonial = createServerFn({ method: "POST" })
         console.error("[integrations]", e);
       }
 
-      // Consome magic link se enviado
-      const magicToken = String(
-        (data as { magicToken?: string }).magicToken || "",
-      );
-      if (magicToken) {
+      if (data.magicToken) {
         const { consumeCollectLink } = await import("./collect-links");
-        await consumeCollectLink(magicToken);
+        await consumeCollectLink(data.magicToken);
       }
 
       const { mapTestimonial } = await import("./mappers");
@@ -316,10 +298,12 @@ export const submitTestimonial = createServerFn({ method: "POST" })
     let videoPath: string | undefined;
     let hasVideo = false;
 
-    if (data.video) {
-      const saved = await saveUploadedVideo(data.video, id);
-      if (!saved.ok) return { ok: false as const, error: saved.error };
-      videoPath = saved.path;
+    if (data.videoPath) {
+      const { isSafeVideoPath } = await import("./video-upload");
+      if (!isSafeVideoPath(data.videoPath)) {
+        return { ok: false as const, error: "Caminho de vídeo inválido." };
+      }
+      videoPath = data.videoPath;
       hasVideo = true;
     }
 
@@ -391,7 +375,7 @@ export const submitTestimonial = createServerFn({ method: "POST" })
     }
 
     return { ok: true as const, testimonial };
-  });
+}
 
 const moderateSchema = z.object({
   id: z.string().min(1),

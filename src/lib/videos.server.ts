@@ -1,43 +1,21 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { extFromVideo, validateVideoFile } from "./video-upload";
 
 const VIDEO_DIR = join(process.cwd(), ".data", "videos");
-const MAX_BYTES = 100 * 1024 * 1024;
-const ALLOWED = new Set([
-  "video/mp4",
-  "video/quicktime",
-  "video/webm",
-  "video/x-m4v",
-]);
 
 function ensureDir() {
   if (!existsSync(VIDEO_DIR)) mkdirSync(VIDEO_DIR, { recursive: true });
-}
-
-function extFromType(type: string, name: string) {
-  if (type.includes("webm")) return "webm";
-  if (type.includes("quicktime") || name.toLowerCase().endsWith(".mov")) return "mov";
-  return "mp4";
 }
 
 export async function saveUploadedVideo(
   file: File,
   id: string,
 ): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
-  if (!file || file.size === 0) {
-    return { ok: false, error: "Arquivo de vídeo vazio." };
-  }
-  if (file.size > MAX_BYTES) {
-    return { ok: false, error: "Vídeo acima do limite de 100 MB." };
-  }
-  if (file.type && !ALLOWED.has(file.type)) {
-    return {
-      ok: false,
-      error: "Formato não suportado. Use MP4, MOV ou WEBM.",
-    };
-  }
+  const check = validateVideoFile(file);
+  if (!check.ok) return check;
 
-  const ext = extFromType(file.type || "", file.name || "");
+  const ext = extFromVideo(file.type || "", file.name || "");
   const filename = `${id}.${ext}`;
   const buffer = Buffer.from(await file.arrayBuffer());
 

@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { VideoCapture } from "@/components/video-capture";
 import { getProjectBySlug } from "@/lib/projects";
 import { submitTestimonial } from "@/lib/testimonials";
+import { uploadCollectVideo } from "@/lib/videos.client";
 
 export const Route = createFileRoute("/coletar/$slug")({
   validateSearch: z.object({
@@ -114,25 +115,48 @@ function CollectPage() {
           setError(null);
           setLoading(true);
           try {
-            const fd = new FormData();
-            fd.set("slug", project.slug);
-            fd.set("name", name);
-            fd.set("role", role);
-            fd.set("company", company);
-            fd.set("text", text);
-            fd.set("rating", String(rating));
-            if (authorEmail.trim()) fd.set("authorEmail", authorEmail.trim());
-            if (magicToken) fd.set("magicToken", magicToken);
-            if (videoFile) fd.set("video", videoFile);
+            let videoPath: string | undefined;
 
-            const result = await submitTestimonial({ data: fd });
+            if (videoFile) {
+              const uploaded = await uploadCollectVideo(videoFile);
+              if (!uploaded.ok) {
+                if (uploaded.useServerUpload) {
+                  setError(
+                    "Upload de vídeo exige Supabase Storage. Confira VITE_SUPABASE_URL / ANON_KEY e o bucket 'videos'.",
+                  );
+                } else {
+                  setError(uploaded.error);
+                }
+                return;
+              }
+              videoPath = uploaded.path;
+            }
+
+            const result = await submitTestimonial({
+              data: {
+                slug: project.slug,
+                name,
+                role: role || undefined,
+                company: company || undefined,
+                text,
+                rating,
+                authorEmail: authorEmail.trim() || undefined,
+                magicToken: magicToken || undefined,
+                videoPath,
+              },
+            });
             if (!result.ok) {
               setError(result.error);
               return;
             }
             setSent(true);
-          } catch {
-            setError("Não foi possível enviar. Tente novamente.");
+          } catch (err) {
+            console.error("[coletar]", err);
+            const msg =
+              err instanceof Error && err.message
+                ? err.message
+                : "Não foi possível enviar. Tente novamente.";
+            setError(msg);
           } finally {
             setLoading(false);
           }

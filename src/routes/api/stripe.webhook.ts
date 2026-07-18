@@ -7,8 +7,18 @@ export const Route = createFileRoute("/api/stripe/webhook")({
       POST: async ({ request }) => {
         const secret = process.env.STRIPE_WEBHOOK_SECRET;
         const key = process.env.STRIPE_SECRET_KEY;
-        if (!secret || !key) {
-          return new Response("Stripe webhook not configured", { status: 500 });
+        // Rejeita placeholders tipo "whsec_..." (muito curtos / incompletos)
+        if (
+          !key ||
+          !secret ||
+          secret.length < 20 ||
+          /^whsec_\.+$/i.test(secret) ||
+          secret === "whsec_..."
+        ) {
+          return new Response(
+            "Stripe webhook not configured. Set a real STRIPE_WEBHOOK_SECRET (stripe listen or Dashboard).",
+            { status: 500 },
+          );
         }
 
         const stripe = new Stripe(key);

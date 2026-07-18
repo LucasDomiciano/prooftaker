@@ -136,3 +136,22 @@ export function getSupabaseAdminClient(): SupabaseClient<Database> | null {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 }
+
+/**
+ * Client sem cookies — para rotas públicas (coleta) onde getCookies/setCookie
+ * podem falhar ou não há sessão. Prefere service role; senão anon puro.
+ */
+export function getSupabasePublicClient(): SupabaseClient<Database> {
+  const admin = getSupabaseAdminClient();
+  if (admin) return admin;
+
+  const { url, anonKey } = getSupabaseEnv();
+  if (!url || !anonKey) {
+    throw new Error(
+      "Supabase não configurado. Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.",
+    );
+  }
+  return createClient<Database>(url, anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
